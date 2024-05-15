@@ -189,8 +189,7 @@ class Controller {
     if (ctx === null) return;
 
     const { width, height } = App.model.data.simulation_config;
-    const simulation: Simulation = new Simulation(canvas, width, height);
-    simulation.configure(App.model.data.simulation_config);
+    const simulation: Simulation = new Simulation(ctx, width, height, App.model.data.simulation_config);
     App.model.data.simulation = simulation;
     simulation.start();
   }

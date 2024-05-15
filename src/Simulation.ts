@@ -16,21 +16,22 @@ class Simulation {
     private particles: Particle[];
     private densities: number[];
     private velocities: { x: number, y: number }[];
-    private spacial_lookup: { cell_key: number, particle_index: number }[];
-    private start_indices: number[];
+    private spacial_lookup: { key: number, particle_index: number }[];
+    private start_indices: number[] = [];
     // Debug
     private debug: Simulation_Debug = new Simulation_Debug();
 
 
-    constructor(canvas: HTMLCanvasElement, width: number, height: number) {
-        this.ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+    constructor(ctx: CanvasRenderingContext2D, width: number, height: number, config: { [key: string]: any }) {
+        this.ctx = ctx;
         this.width = width;
         this.height = height;
-        this.particles = [];
-        this.densities = [];
-        this.velocities = [];
         this.spacial_lookup = [];
-        this.start_indices = [];
+        this.configure(config);
+        // this.particles = this.create_random_particles();
+        this.particles = this.create_grid_particles();
+        this.densities = this.particles.map(particle => particle.mass);
+        this.velocities = this.particles.map(particle => ({ x: 0, y: 0 }));
     }
 
     public configure(config: { [key: string]: any }): void {
@@ -41,11 +42,6 @@ class Simulation {
         this.target_density = config.target_density;
         this.pressure_multiplier = config.pressure_multiplier;
         this.smoothing_radius = config.smoothing_radius;
-        this.particles = this.create_random_particles();
-
-        this.densities = this.particles.map(particle => particle.mass);
-        this.velocities = this.particles.map(particle => ({ x: 0, y: 0 }));
-
         console.log('config:', config);
     }
 
@@ -71,64 +67,52 @@ class Simulation {
 
 
     private position_to_cell_coord(x: number, y: number): { x: number, y: number } {
-        const cell_size = this.smoothing_radius;
+        const cell_size = this.smoothing_radius * 2;
         const cell_x = Math.floor(x / cell_size);
         const cell_y = Math.floor(y / cell_size);
         return { x: cell_x, y: cell_y };
     }
 
-    private hash_cell(x: number, y: number): number {
-        const a = x * 15823;
-        const b = y * 9737333;
-        return a + b;
+    private cell_coord_to_key(cell_coord: { x: number, y: number }): number {
+        return cell_coord.x + cell_coord.y * this.width;
     }
 
-    private get_cell_key_from_hash(hash: number): number {
-        return hash % this.spacial_lookup.length;
+    private key_to_cell_coord(key: number): { x: number, y: number } {
+        const x = key % this.width;
+        const y = Math.floor(key / this.width);
+        return { x, y };
     }
 
     private update_spacial_lookup(): void {
         this.spacial_lookup = [];
         this.start_indices = [];
-        this.spacial_lookup.map(() => ({ cell_key: -1, particle_index: -1 }));
-        this.start_indices.map(() => -1);
-        // Calculate spacial lookup
-        this.particles.forEach((particle: Particle, index: number) => {
+        // Create spacial lookup
+        this.particles.forEach((particle, particle_index) => {
             const cell_coord = this.position_to_cell_coord(particle.x, particle.y);
-            const cell_key = this.get_cell_key_from_hash(this.hash_cell(cell_coord.x, cell_coord.y));
-            this.spacial_lookup.push({ cell_key, particle_index: index });
+            const key = this.cell_coord_to_key(cell_coord);
+            this.spacial_lookup.push({ key, particle_index });
         });
-        console.log('spacial_lookup:', this.spacial_lookup);
-        // Sort
-        this.spacial_lookup.sort((a, b) => a.cell_key - b.cell_key);
-        // Find start indices
-        let last_key = this.spacial_lookup[0].cell_key;
-        this.start_indices[last_key] = 0;
-        for (let i = 1; i < this.spacial_lookup.length; i++) {
-            const key = this.spacial_lookup[i].cell_key;
-            if (key !== last_key) {
-                this.start_indices[key] = i;
-                last_key = key;
+        // Sort by key
+        this.spacial_lookup.sort((a, b) => a.key - b.key);
+        // Create start indices
+        this.spacial_lookup.forEach((entry, i) => {
+            if (i === 0 || entry.key !== this.spacial_lookup[i - 1].key) {
+                this.start_indices[entry.key] = i;
             }
-        }
+        });
     }
 
     private foreach_particles_within_radius(x: number, y: number, callback: (particle: Particle, index: number) => void): void {
-        const center_coord = this.position_to_cell_coord(x, y);
-        for (let i = center_coord.x - 1; i <= center_coord.x + 1; i++) {
-            for (let j = center_coord.y - 1; j <= center_coord.y + 1; j++) {
-                const key = this.get_cell_key_from_hash(this.hash_cell(i, j));
-                const start_index = this.start_indices[key];
-                for (let k = start_index; k < this.spacial_lookup.length; k++) {
-                    if (this.spacial_lookup[k].cell_key !== key) {
-                        break;
-                    }
-                    const particle = this.particles[this.spacial_lookup[k].particle_index];
-                    const distance = this.calculate_distance(x, y, particle.x, particle.y);
-                    if (distance <= this.smoothing_radius) {
-                        callback(particle, this.spacial_lookup[k].particle_index);
-                    }
-                }
+        const cell_coord = this.position_to_cell_coord(x, y);
+        const key = this.cell_coord_to_key(cell_coord);
+        const start_index = this.start_indices[key];
+        const end_index = this.start_indices[key + 1] || this.spacial_lookup.length;
+        for (let i = start_index; i < end_index; i++) {
+            const entry = this.spacial_lookup[i];
+            const particle = this.particles[entry.particle_index];
+            const distance = this.calculate_distance(x, y, particle.x, particle.y);
+            if (distance < this.smoothing_radius) {
+                callback(particle, entry.particle_index);
             }
         }
     }
@@ -153,16 +137,16 @@ class Simulation {
 
     private calculate_density(x: number, y: number): number {
         let density = 0;
-        // this.foreach_particles_within_radius(x, y, (particle: Particle, index: number) => {
-        //     const distance = this.calculate_distance(x, y, particle.x, particle.y);
-        //     const influence = this.smoothing_kernel(distance);
-        //     density += particle.mass * influence
-        // });
-        this.particles.forEach(particle => {
+        this.foreach_particles_within_radius(x, y, (particle: Particle, index: number) => {
             const distance = this.calculate_distance(x, y, particle.x, particle.y);
             const influence = this.smoothing_kernel(distance);
             density += particle.mass * influence
         });
+        // this.particles.forEach(particle => {
+        //     const distance = this.calculate_distance(x, y, particle.x, particle.y);
+        //     const influence = this.smoothing_kernel(distance);
+        //     density += particle.mass * influence
+        // });
         return density;
     }
 
@@ -180,23 +164,7 @@ class Simulation {
         let pressure: { x: number, y: number } = { x: 0, y: 0 };
         let direction: { x: number, y: number } = { x: 0, y: 0 };
         const particle = this.particles[particle_index];
-        // this.foreach_particles_within_radius(particle.x, particle.y, (other_particle: Particle, other_particle_index: number) => {
-        //     const distance = this.calculate_distance(particle.x, particle.y, other_particle.x, other_particle.y);
-        //     if (distance == 0) {
-        //         direction.x = Math.random();
-        //         direction.y = Math.random();
-        //     } else {
-        //         direction.x = (other_particle.x - particle.x) / distance;
-        //         direction.y = (other_particle.y - particle.y) / distance;
-        //     }
-        //     const slope = this.somoothing_kernel_derivative(distance);
-        //     const density = this.densities[other_particle_index];
-        //     const shared_pressure = this.calculate_shared_pressure(density, this.densities[particle_index]);
-        //     pressure.x += shared_pressure * direction.x * slope * particle.mass / density;
-        //     pressure.y += shared_pressure * direction.y * slope * particle.mass / density;
-        // });
-
-        this.particles.forEach((other_particle: Particle, other_particle_index: number) => {
+        this.foreach_particles_within_radius(particle.x, particle.y, (other_particle: Particle, other_particle_index: number) => {
             if (other_particle_index === particle_index) {
                 return;
             }
@@ -214,6 +182,24 @@ class Simulation {
             pressure.x += shared_pressure * direction.x * slope * particle.mass / density;
             pressure.y += shared_pressure * direction.y * slope * particle.mass / density;
         });
+        // this.particles.forEach((other_particle: Particle, other_particle_index: number) => {
+        //     if (other_particle_index === particle_index) {
+        //         return;
+        //     }
+        //     const distance = this.calculate_distance(particle.x, particle.y, other_particle.x, other_particle.y);
+        //     if (distance == 0) {
+        //         direction.x = Math.random();
+        //         direction.y = Math.random();
+        //     } else {
+        //         direction.x = (other_particle.x - particle.x) / distance;
+        //         direction.y = (other_particle.y - particle.y) / distance;
+        //     }
+        //     const slope = this.somoothing_kernel_derivative(distance);
+        //     const density = this.densities[other_particle_index];
+        //     const shared_pressure = this.calculate_shared_pressure(density, this.densities[particle_index]);
+        //     pressure.x += shared_pressure * direction.x * slope * particle.mass / density;
+        //     pressure.y += shared_pressure * direction.y * slope * particle.mass / density;
+        // });
         return pressure;
     }
 
@@ -232,12 +218,13 @@ class Simulation {
     private create_grid_particles(): Particle[] {
         const particles: Particle[] = [];
         const mass = 10;
-        const cols = 50;
-        const rows = 50;
+        const cols = 30;
+        const rows = 30;
+        const center = { x: this.width / 2, y: this.height / 2 };
         for (let i = 0; i < rows; i++) {
             for (let j = 0; j < cols; j++) {
-                const x = mass + (this.width / cols) * j;
-                const y = mass + (this.height / rows) * i;
+                const x = center.x - cols / 2 * mass + j * mass;
+                const y = center.y - rows / 2 * mass + i * mass;
                 const color = 'blue';
                 particles.push(new Particle(x, y, mass, color));
             }
@@ -245,13 +232,9 @@ class Simulation {
         return particles;
     }
 
-
-
-    private update(): void {
-        this.update_spacial_lookup();
+    private update_particles(): void {
         this.particles.forEach((particle: Particle, i: number) => {
             this.densities[i] = this.calculate_density(particle.x, particle.y);
-
             // Apply gravity
             this.velocities[i].y += this.gravity;
             // Apply friction
@@ -272,6 +255,11 @@ class Simulation {
             particle.x += this.velocities[i].x;
             particle.y += this.velocities[i].y;
         });
+    }
+
+    private update(): void {
+        this.update_spacial_lookup();
+        this.update_particles();
     }
 
     private draw(): void {
