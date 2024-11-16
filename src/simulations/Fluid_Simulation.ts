@@ -1,4 +1,4 @@
-class Simulation {
+export default class Fluid_Simulation {
     private running: boolean = false;
     // Canvas
     private ctx: CanvasRenderingContext2D;
@@ -19,7 +19,7 @@ class Simulation {
     private spacial_lookup: { key: number, particle_index: number }[];
     private start_indices: number[] = [];
     // Debug
-    private debug: Simulation_Debug = new Simulation_Debug();
+    private debug: Fluid_Simulation_Debug = new Fluid_Simulation_Debug();
 
 
     constructor(ctx: CanvasRenderingContext2D, width: number, height: number, config: { [key: string]: any }) {
@@ -279,7 +279,7 @@ class Simulation {
     }
 }
 
-class Simulation_Debug {
+class Fluid_Simulation_Debug {
     private circles: { x: number, y: number, radius: number, color: string }[] = [];
     private lines: { x1: number, y1: number, x2: number, y2: number, color: string }[] = [];
     private text: { x: number, y: number, text: string, color: string }[] = [];
@@ -342,5 +342,3 @@ class Particle {
         ctx.fill();
     }
 }
-
-export { Simulation }
